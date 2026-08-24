@@ -64,7 +64,7 @@
     elements.status.className = 'live-status' + (kind ? ' ' + kind : '');
   }
 
-  function showScanFeedback(title, detail, kind = 'success', duration = 1800) {
+  function showScanFeedback(title, detail, kind = 'success', duration = 900) {
     window.clearTimeout(state.feedbackTimer);
     elements.feedbackTitle.textContent = title;
     elements.feedbackDetail.textContent = detail;
@@ -183,8 +183,8 @@
     elements.count.textContent = '本日の読取 ' + state.scanCount;
     elements.lastRead.hidden = false;
     elements.lastRead.textContent = '直近の読取：#' + state.scanCount + '　GASへ送信中';
-    setStatus('QRを認識しました。GASへ送信しています…', 'success');
-    showScanFeedback('読み取りOK', 'GASへ送信しています', 'success', 1800);
+    setStatus('読み取り完了。送信中…', 'success');
+    showScanFeedback('読み取り完了', '送信中', 'success', 900);
     elements.frame.classList.add('scan-success');
     window.clearTimeout(state.successTimer);
     state.successTimer = window.setTimeout(() => elements.frame.classList.remove('scan-success'), 420);
@@ -197,7 +197,7 @@
     if (message.token && message.token !== state.latestToken) return;
     elements.lastRead.textContent = '直近の読取：#' + state.scanCount + '　GASへ受け渡し済み';
     setStatus('読み取り済み。GASへ受け渡しました。次のノートへ', 'success');
-    showScanFeedback('送信済み', 'GASへ受け渡しました', 'success', 1600);
+    showScanFeedback('送信済み', 'GASへ受け渡しました', 'success', 800);
   }
 
   function handleSubmissionResult(message) {
@@ -205,14 +205,14 @@
     if (message.status === 'RECEIVED') {
       elements.lastRead.textContent = '直近の読取：#' + state.scanCount + '　保存完了';
       setStatus('保存完了。次のノートへ', 'success');
-      showScanFeedback('保存完了', '今日の提出として登録しました', 'success', 1800);
+      showScanFeedback('保存完了', '今日の提出として登録しました', 'success', 900);
     } else if (message.status === 'ALREADY_RECEIVED' || message.status === 'DUPLICATE_REQUEST') {
       elements.lastRead.textContent = '直近の読取：#' + state.scanCount + '　今日は確認済み';
       setStatus('今日は確認済みです。次のノートへ', 'warning');
-      showScanFeedback('今日は確認済み', '重複登録はしていません', 'warning', 1900);
+      showScanFeedback('今日は確認済み', '重複登録はしていません', 'warning', 950);
     } else {
       setStatus(message.message || '保存結果を確認できません。自動で再送します', 'error');
-      showScanFeedback('保存待ち', message.message || 'GASが再送を試みます', 'warning', 2400);
+      showScanFeedback('保存待ち', message.message || 'GASが再送を試みます', 'warning', 1200);
     }
   }
 
@@ -322,7 +322,7 @@
       handleSubmissionResult(message);
     } else if (message.type === 'SUBMISSION_ERROR') {
       setStatus(message.message || 'GASへの保存待ちです。自動で再送します', 'warning');
-      showScanFeedback('保存待ち', message.message || 'GASが自動で再送します', 'warning', 2400);
+      showScanFeedback('保存待ち', message.message || 'GASが自動で再送します', 'warning', 1200);
     } else if (message.type === 'CLOSE') {
       stopCamera(false);
       window.close();
