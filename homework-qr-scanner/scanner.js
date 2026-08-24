@@ -14,6 +14,9 @@
     frame: document.getElementById('cameraFrame'),
     video: document.getElementById('cameraPreview'),
     message: document.getElementById('cameraMessage'),
+    feedbackOverlay: document.getElementById('scanFeedbackOverlay'),
+    feedbackTitle: document.getElementById('scanFeedbackTitle'),
+    feedbackDetail: document.getElementById('scanFeedbackDetail'),
     status: document.getElementById('liveStatus'),
     cameraControlsStatus: document.getElementById('cameraControlsStatus'),
     button: document.getElementById('cameraButton'),
@@ -35,6 +38,9 @@
     mirrorEnabled: false,
     starting: false,
     switching: false,
+    feedbackTimer: null,
+    latestToken: '',
+    audioContext: null,
     lastSeen: new Map()
   };
 
@@ -56,6 +62,56 @@
   function setStatus(message, kind) {
     elements.status.textContent = message;
     elements.status.className = 'live-status' + (kind ? ' ' + kind : '');
+  }
+
+  function showScanFeedback(title, detail, kind = 'success', duration = 1800) {
+    window.clearTimeout(state.feedbackTimer);
+    elements.feedbackTitle.textContent = title;
+    elements.feedbackDetail.textContent = detail;
+    elements.feedbackOverlay.className = 'scan-feedback-overlay' + (kind && kind !== 'success' ? ' ' + kind : '');
+    elements.feedbackOverlay.hidden = false;
+    if (duration > 0) {
+      state.feedbackTimer = window.setTimeout(() => {
+        elements.feedbackOverlay.hidden = true;
+        elements.feedbackOverlay.className = 'scan-feedback-overlay';
+      }, duration);
+    }
+  }
+
+  function hideScanFeedback() {
+    window.clearTimeout(state.feedbackTimer);
+    elements.feedbackOverlay.hidden = true;
+    elements.feedbackOverlay.className = 'scan-feedback-overlay';
+  }
+
+  function getAudioContext() {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return null;
+    if (!state.audioContext) state.audioContext = new AudioContextClass();
+    return state.audioContext;
+  }
+
+  function playScannerTone(kind = 'detected') {
+    try {
+      const context = getAudioContext();
+      if (!context) return;
+      const notes = kind === 'error' ? [220] : kind === 'success' ? [820, 1040] : [660, 880];
+      const play = () => notes.forEach((frequency, index) => {
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        const startAt = context.currentTime + index * 0.06;
+        oscillator.frequency.value = frequency;
+        oscillator.type = kind === 'error' ? 'sawtooth' : 'sine';
+        gain.gain.setValueAtTime(0.0001, startAt);
+        gain.gain.exponentialRampToValueAtTime(0.11, startAt + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.1);
+        oscillator.connect(gain).connect(context.destination);
+        oscillator.start(startAt);
+        oscillator.stop(startAt + 0.11);
+      });
+      if (context.state === 'suspended') context.resume().then(play).catch(() => {});
+      else play();
+    } catch (_) {}
   }
 
   function cameraLabel(facingMode) {
@@ -123,15 +179,41 @@
       if (now - seenAt > 15000) state.lastSeen.delete(key);
     }
     state.scanCount += 1;
+    state.latestToken = token;
     elements.count.textContent = '本日の読取 ' + state.scanCount;
     elements.lastRead.hidden = false;
-    elements.lastRead.textContent = '直近の読取：固定QRを受け付けました（' + token.slice(0, 8) + '…）';
-    setStatus('読み取り完了。次のノートへ', 'success');
+    elements.lastRead.textContent = '直近の読取：#' + state.scanCount + '　GASへ送信中';
+    setStatus('QRを認識しました。GASへ送信しています…', 'success');
+    showScanFeedback('読み取りOK', 'GASへ送信しています', 'success', 1800);
     elements.frame.classList.add('scan-success');
     window.clearTimeout(state.successTimer);
     state.successTimer = window.setTimeout(() => elements.frame.classList.remove('scan-success'), 420);
     postToParent({ type: 'TOKEN', token });
+    playScannerTone('detected');
     if ('vibrate' in navigator && typeof navigator.vibrate === 'function') navigator.vibrate(35);
+  }
+
+  function handleTokenAccepted(message) {
+    if (message.token && message.token !== state.latestToken) return;
+    elements.lastRead.textContent = '直近の読取：#' + state.scanCount + '　GASへ受け渡し済み';
+    setStatus('読み取り済み。GASへ受け渡しました。次のノートへ', 'success');
+    showScanFeedback('送信済み', 'GASへ受け渡しました', 'success', 1600);
+  }
+
+  function handleSubmissionResult(message) {
+    if (message.token && message.token !== state.latestToken) return;
+    if (message.status === 'RECEIVED') {
+      elements.lastRead.textContent = '直近の読取：#' + state.scanCount + '　保存完了';
+      setStatus('保存完了。次のノートへ', 'success');
+      showScanFeedback('保存完了', '今日の提出として登録しました', 'success', 1800);
+    } else if (message.status === 'ALREADY_RECEIVED' || message.status === 'DUPLICATE_REQUEST') {
+      elements.lastRead.textContent = '直近の読取：#' + state.scanCount + '　今日は確認済み';
+      setStatus('今日は確認済みです。次のノートへ', 'warning');
+      showScanFeedback('今日は確認済み', '重複登録はしていません', 'warning', 1900);
+    } else {
+      setStatus(message.message || '保存結果を確認できません。自動で再送します', 'error');
+      showScanFeedback('保存待ち', message.message || 'GASが再送を試みます', 'warning', 2400);
+    }
   }
 
   async function startCamera() {
@@ -195,6 +277,7 @@
     state.actualFacingMode = 'unknown';
     state.mirrorEnabled = false;
     elements.video.classList.remove('camera-preview--mirrored');
+    hideScanFeedback();
     elements.frame.classList.remove('is-active');
     elements.message.hidden = false;
     elements.button.textContent = 'カメラを開始';
@@ -233,6 +316,13 @@
     if (message.type === 'CONNECTED') {
       setConnected(true);
       void startCamera();
+    } else if (message.type === 'TOKEN_ACCEPTED') {
+      handleTokenAccepted(message);
+    } else if (message.type === 'SUBMISSION_RESULT') {
+      handleSubmissionResult(message);
+    } else if (message.type === 'SUBMISSION_ERROR') {
+      setStatus(message.message || 'GASへの保存待ちです。自動で再送します', 'warning');
+      showScanFeedback('保存待ち', message.message || 'GASが自動で再送します', 'warning', 2400);
     } else if (message.type === 'CLOSE') {
       stopCamera(false);
       window.close();
@@ -251,6 +341,12 @@
     setStatus('このタブは閉じられません。ブラウザの戻る操作で戻ってください');
   });
   window.addEventListener('message', onParentMessage);
+  window.addEventListener('pointerdown', () => {
+    try {
+      const context = getAudioContext();
+      if (context && context.state === 'suspended') void context.resume();
+    } catch (_) {}
+  }, { passive: true });
   window.addEventListener('beforeunload', () => stopCamera());
 
   setConnected(validConnection());
