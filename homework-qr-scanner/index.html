@@ -39,6 +39,11 @@
 
       <div class="viewer-footer">
         <p id="liveStatus" class="live-status" role="status" aria-live="polite">GAS画面との接続を待っています</p>
+        <p id="cameraControlsStatus" class="camera-controls-status" role="status" aria-live="polite">外カメラ・左右反転なし</p>
+        <div class="camera-options" aria-label="カメラ設定">
+          <button id="switchCameraButton" class="secondary-button camera-option-button" type="button" disabled>内カメラに切り替え</button>
+          <button id="mirrorButton" class="secondary-button camera-option-button" type="button" disabled aria-pressed="false">左右反転：OFF</button>
+        </div>
         <div class="button-row">
           <button id="cameraButton" class="primary-button" type="button" disabled>カメラを開始</button>
           <button id="closeButton" class="secondary-button" type="button">画面を閉じる</button>
