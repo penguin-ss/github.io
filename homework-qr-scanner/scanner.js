@@ -15,7 +15,10 @@
     video: document.getElementById('cameraPreview'),
     message: document.getElementById('cameraMessage'),
     status: document.getElementById('liveStatus'),
+    cameraControlsStatus: document.getElementById('cameraControlsStatus'),
     button: document.getElementById('cameraButton'),
+    switchCamera: document.getElementById('switchCameraButton'),
+    mirror: document.getElementById('mirrorButton'),
     close: document.getElementById('closeButton'),
     count: document.getElementById('scanCount'),
     lastRead: document.getElementById('lastRead')
@@ -27,6 +30,11 @@
     controls: null,
     scanCount: 0,
     successTimer: null,
+    requestedFacingMode: 'environment',
+    actualFacingMode: 'unknown',
+    mirrorEnabled: false,
+    starting: false,
+    switching: false,
     lastSeen: new Map()
   };
 
@@ -50,6 +58,25 @@
     elements.status.className = 'live-status' + (kind ? ' ' + kind : '');
   }
 
+  function cameraLabel(facingMode) {
+    if (facingMode === 'user') return '内カメラ';
+    if (facingMode === 'environment') return '外カメラ';
+    return 'カメラ';
+  }
+
+  function updateCameraControls() {
+    const currentMode = state.actualFacingMode === 'unknown' ? state.requestedFacingMode : state.actualFacingMode;
+    const targetMode = currentMode === 'user' ? 'environment' : 'user';
+    const controlsDisabled = !state.active || state.starting || state.switching;
+    elements.button.disabled = !state.connected || state.starting || state.switching;
+    elements.switchCamera.disabled = controlsDisabled;
+    elements.mirror.disabled = controlsDisabled;
+    elements.switchCamera.textContent = cameraLabel(targetMode) + 'に切り替え';
+    elements.mirror.textContent = '左右反転：' + (state.mirrorEnabled ? 'ON' : 'OFF');
+    elements.mirror.setAttribute('aria-pressed', String(state.mirrorEnabled));
+    elements.cameraControlsStatus.textContent = cameraLabel(currentMode) + '・左右反転' + (state.mirrorEnabled ? 'あり' : 'なし');
+  }
+
   function setConnected(connected) {
     state.connected = connected;
     elements.badge.classList.toggle('is-connected', connected);
@@ -62,6 +89,7 @@
       elements.button.textContent = 'カメラを開始';
       setStatus('カメラを起動しています…');
     }
+    updateCameraControls();
   }
 
   function errorText(error) {
@@ -78,7 +106,10 @@
     const track = stream && typeof stream.getVideoTracks === 'function' ? stream.getVideoTracks()[0] : null;
     const settings = track && typeof track.getSettings === 'function' ? track.getSettings() : {};
     const facingMode = String(settings.facingMode || '').toLowerCase();
-    elements.video.classList.toggle('camera-preview--mirrored', facingMode === 'user');
+    state.actualFacingMode = facingMode === 'user' || facingMode === 'environment' ? facingMode : 'unknown';
+    state.mirrorEnabled = state.actualFacingMode === 'user';
+    elements.video.classList.toggle('camera-preview--mirrored', state.mirrorEnabled);
+    updateCameraControls();
   }
 
   function handleToken(rawToken) {
@@ -104,12 +135,14 @@
   }
 
   async function startCamera() {
-    if (!state.connected || state.active) return;
+    if (!state.connected || state.active || state.starting) return;
     if (!window.ZXingBrowser || !window.ZXingBrowser.BrowserQRCodeReader || !navigator.mediaDevices?.getUserMedia) {
       setStatus('このブラウザではカメラを利用できません', 'error');
       postToParent({ type: 'ERROR', message: 'カメラAPIを利用できません' });
       return;
     }
+    state.starting = true;
+    updateCameraControls();
     setStatus('カメラを起動しています…');
     try {
       const reader = new window.ZXingBrowser.BrowserQRCodeReader(undefined, {
@@ -120,7 +153,7 @@
       state.controls = await reader.decodeFromConstraints({
         audio: false,
         video: {
-          facingMode: { ideal: 'environment' },
+          facingMode: { ideal: state.requestedFacingMode },
           width: { ideal: 1280 },
           height: { ideal: 720 }
         }
@@ -145,6 +178,9 @@
       elements.button.textContent = 'カメラを開始';
       setStatus(errorText(error), 'error');
       postToParent({ type: 'ERROR', message: errorText(error) });
+    } finally {
+      state.starting = false;
+      updateCameraControls();
     }
   }
 
@@ -156,12 +192,38 @@
     if (stream instanceof MediaStream) stream.getTracks().forEach(track => track.stop());
     elements.video.srcObject = null;
     state.active = false;
+    state.actualFacingMode = 'unknown';
+    state.mirrorEnabled = false;
     elements.video.classList.remove('camera-preview--mirrored');
     elements.frame.classList.remove('is-active');
     elements.message.hidden = false;
     elements.button.textContent = 'カメラを開始';
     setStatus(state.connected ? 'カメラは停止中です' : 'GAS画面との接続を待っています');
+    updateCameraControls();
     if (notify) postToParent({ type: 'STOPPED' });
+  }
+
+  async function switchCamera() {
+    if (!state.active || state.switching) return;
+    const currentMode = state.actualFacingMode === 'unknown' ? state.requestedFacingMode : state.actualFacingMode;
+    state.requestedFacingMode = currentMode === 'user' ? 'environment' : 'user';
+    state.switching = true;
+    updateCameraControls();
+    setStatus(cameraLabel(state.requestedFacingMode) + 'を起動しています…');
+    stopCamera(false);
+    try {
+      await startCamera();
+    } finally {
+      state.switching = false;
+      updateCameraControls();
+    }
+  }
+
+  function toggleMirror() {
+    if (!state.active || state.starting || state.switching) return;
+    state.mirrorEnabled = !state.mirrorEnabled;
+    elements.video.classList.toggle('camera-preview--mirrored', state.mirrorEnabled);
+    updateCameraControls();
   }
 
   function onParentMessage(event) {
@@ -181,6 +243,8 @@
     if (state.active) stopCamera();
     else void startCamera();
   });
+  elements.switchCamera.addEventListener('click', () => void switchCamera());
+  elements.mirror.addEventListener('click', toggleMirror);
   elements.close.addEventListener('click', () => {
     stopCamera();
     window.close();
