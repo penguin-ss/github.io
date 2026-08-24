@@ -73,6 +73,14 @@
     return 'カメラを開始できませんでした。もう一度お試しください。';
   }
 
+  function applyCameraOrientation() {
+    const stream = elements.video.srcObject;
+    const track = stream && typeof stream.getVideoTracks === 'function' ? stream.getVideoTracks()[0] : null;
+    const settings = track && typeof track.getSettings === 'function' ? track.getSettings() : {};
+    const facingMode = String(settings.facingMode || '').toLowerCase();
+    elements.video.classList.toggle('camera-preview--mirrored', facingMode === 'user');
+  }
+
   function handleToken(rawToken) {
     const token = String(rawToken || '').trim().toUpperCase();
     if (!TOKEN_PATTERN.test(token)) return;
@@ -119,6 +127,7 @@
       }, elements.video, result => {
         if (result) handleToken(result.getText());
       });
+      applyCameraOrientation();
       state.active = true;
       elements.frame.classList.add('is-active');
       elements.message.hidden = true;
@@ -130,6 +139,7 @@
       state.controls = null;
       state.reader = null;
       state.active = false;
+      elements.video.classList.remove('camera-preview--mirrored');
       elements.frame.classList.remove('is-active');
       elements.message.hidden = false;
       elements.button.textContent = 'カメラを開始';
@@ -146,6 +156,7 @@
     if (stream instanceof MediaStream) stream.getTracks().forEach(track => track.stop());
     elements.video.srcObject = null;
     state.active = false;
+    elements.video.classList.remove('camera-preview--mirrored');
     elements.frame.classList.remove('is-active');
     elements.message.hidden = false;
     elements.button.textContent = 'カメラを開始';
