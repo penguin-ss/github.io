@@ -26,6 +26,7 @@
     reader: null,
     controls: null,
     scanCount: 0,
+    successTimer: null,
     lastSeen: new Map()
   };
 
@@ -86,7 +87,10 @@
     elements.count.textContent = '本日の読取 ' + state.scanCount;
     elements.lastRead.hidden = false;
     elements.lastRead.textContent = '直近の読取：固定QRを受け付けました（' + token.slice(0, 8) + '…）';
-    setStatus('読み取りました。次のノートへ', 'success');
+    setStatus('読み取り完了。次のノートへ', 'success');
+    elements.frame.classList.add('scan-success');
+    window.clearTimeout(state.successTimer);
+    state.successTimer = window.setTimeout(() => elements.frame.classList.remove('scan-success'), 420);
     postToParent({ type: 'TOKEN', token });
     if ('vibrate' in navigator && typeof navigator.vibrate === 'function') navigator.vibrate(35);
   }
