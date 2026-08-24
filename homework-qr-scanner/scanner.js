@@ -41,6 +41,9 @@
     feedbackTimer: null,
     latestToken: '',
     audioContext: null,
+    deliveryQueue: [],
+    deliveryInFlight: null,
+    deliveryTimer: null,
     lastSeen: new Map()
   };
 
@@ -112,6 +115,36 @@
       if (context.state === 'suspended') context.resume().then(play).catch(() => {});
       else play();
     } catch (_) {}
+  }
+
+  function pumpDeliveryQueue() {
+    if (!validConnection() || state.deliveryInFlight || !state.deliveryQueue.length) return;
+    const item = state.deliveryQueue[0];
+    state.deliveryInFlight = item;
+    item.attempts = (item.attempts || 0) + 1;
+    postToParent({ type: 'TOKEN', token: item.token });
+    window.clearTimeout(state.deliveryTimer);
+    const retryDelay = item.attempts > 3 ? 3000 : 1200;
+    state.deliveryTimer = window.setTimeout(() => {
+      if (state.deliveryInFlight !== item) return;
+      state.deliveryInFlight = null;
+      if (item.attempts > 3) setStatus('送信を再試行しています。読み取りは保持されています', 'warning');
+      pumpDeliveryQueue();
+    }, retryDelay);
+  }
+
+  function settleDelivery(token, accepted) {
+    const item = state.deliveryInFlight;
+    if (!item || (token && item.token !== token)) return;
+    window.clearTimeout(state.deliveryTimer);
+    state.deliveryTimer = null;
+    state.deliveryInFlight = null;
+    state.deliveryQueue.shift();
+    if (!accepted) {
+      setStatus('GASへ受け渡せませんでした。読み取りを確認してください', 'error');
+      showScanFeedback('送信エラー', 'このQRは保持せず、もう一度読み取ってください', 'error', 1200);
+    }
+    pumpDeliveryQueue();
   }
 
   function cameraLabel(facingMode) {
@@ -188,16 +221,24 @@
     elements.frame.classList.add('scan-success');
     window.clearTimeout(state.successTimer);
     state.successTimer = window.setTimeout(() => elements.frame.classList.remove('scan-success'), 420);
-    postToParent({ type: 'TOKEN', token });
+    state.deliveryQueue.push({ token: token, attempts: 0 });
+    pumpDeliveryQueue();
     playScannerTone('detected');
     if ('vibrate' in navigator && typeof navigator.vibrate === 'function') navigator.vibrate(35);
   }
 
   function handleTokenAccepted(message) {
+    settleDelivery(message.token, true);
     if (message.token && message.token !== state.latestToken) return;
     elements.lastRead.textContent = '直近の読取：#' + state.scanCount + '　GASへ受け渡し済み';
     setStatus('読み取り済み。GASへ受け渡しました。次のノートへ', 'success');
     showScanFeedback('送信済み', 'GASへ受け渡しました', 'success', 800);
+  }
+
+  function handleTokenRejected(message) {
+    settleDelivery(message.token, false);
+    if (message.token && message.token !== state.latestToken) return;
+    setStatus(message.message || 'このQRをGASで受け付けられませんでした', 'error');
   }
 
   function handleSubmissionResult(message) {
@@ -318,6 +359,8 @@
       void startCamera();
     } else if (message.type === 'TOKEN_ACCEPTED') {
       handleTokenAccepted(message);
+    } else if (message.type === 'TOKEN_REJECTED') {
+      handleTokenRejected(message);
     } else if (message.type === 'SUBMISSION_RESULT') {
       handleSubmissionResult(message);
     } else if (message.type === 'SUBMISSION_ERROR') {
