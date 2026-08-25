@@ -245,9 +245,9 @@
       if (now - seenAt > 15000) state.lastSeen.delete(key);
     }
     if (state.deliveryQueue.length >= MAX_DELIVERY_QUEUE) {
+      stopCamera(false);
       setStatus('送信待ちが200件に達しました。保存後に再開してください', 'error');
       showScanFeedback('送信待ち上限', 'GASへの保存が進むまで読み取りを停止します', 'error', 1600);
-      stopCamera(false);
       return;
     }
     state.scanCount += 1;
