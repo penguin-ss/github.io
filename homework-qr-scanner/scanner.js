@@ -4,6 +4,9 @@
   const TOKEN_PATTERN = /^HQ1-[A-Z0-9]{24,40}$/;
   const MESSAGE_SOURCE = 'homework-qr-camera';
   const PARENT_SOURCE = 'homework-qr-app';
+  const DELIVERY_BATCH_SIZE = 10;
+  const MAX_DELIVERY_QUEUE = 200;
+  const DELIVERY_ACK_TIMEOUT = 900;
   const params = new URLSearchParams(window.location.search);
   const channel = params.get('channel') || '';
   const parentOrigin = params.get('parentOrigin') || '';
@@ -119,32 +122,62 @@
 
   function pumpDeliveryQueue() {
     if (!validConnection() || state.deliveryInFlight || !state.deliveryQueue.length) return;
-    const item = state.deliveryQueue[0];
-    state.deliveryInFlight = item;
-    item.attempts = (item.attempts || 0) + 1;
-    postToParent({ type: 'TOKEN', token: item.token });
+    const batch = {
+      batchId: createId('BATCH'),
+      items: state.deliveryQueue.slice(0, DELIVERY_BATCH_SIZE),
+      attempts: 0
+    };
+    state.deliveryInFlight = batch;
+    sendDeliveryBatch(batch);
+  }
+
+  function sendDeliveryBatch(batch) {
+    if (state.deliveryInFlight !== batch || !batch.items.length) return;
+    batch.attempts += 1;
+    // 新しいGAS画面には10件を1メッセージで渡す。ACKが返らない場合は、
+    // 2回目以降に従来の1件ずつ送信へフォールバックする。
+    if (batch.attempts <= 2) {
+      postToParent({ type: 'TOKENS', batchId: batch.batchId, tokens: batch.items.map(item => item.token) });
+    } else {
+      batch.items.forEach((item, index) => {
+        window.setTimeout(() => {
+          if (state.deliveryInFlight === batch && batch.items.some(candidate => candidate.token === item.token)) {
+            postToParent({ type: 'TOKEN', token: item.token });
+          }
+        }, index * 18);
+      });
+    }
     window.clearTimeout(state.deliveryTimer);
-    const retryDelay = item.attempts > 3 ? 3000 : 1200;
+    const retryDelay = batch.attempts > 3 ? 3000 : DELIVERY_ACK_TIMEOUT;
     state.deliveryTimer = window.setTimeout(() => {
-      if (state.deliveryInFlight !== item) return;
-      state.deliveryInFlight = null;
-      if (item.attempts > 3) setStatus('送信を再試行しています。読み取りは保持されています', 'warning');
-      pumpDeliveryQueue();
+      if (state.deliveryInFlight !== batch) return;
+      if (batch.attempts > 3) setStatus('送信を再試行しています。読み取りは保持されています', 'warning');
+      sendDeliveryBatch(batch);
     }, retryDelay);
   }
 
-  function settleDelivery(token, accepted) {
-    const item = state.deliveryInFlight;
-    if (!item || (token && item.token !== token)) return;
-    window.clearTimeout(state.deliveryTimer);
-    state.deliveryTimer = null;
-    state.deliveryInFlight = null;
-    state.deliveryQueue.shift();
-    if (!accepted) {
-      setStatus('GASへ受け渡せませんでした。読み取りを確認してください', 'error');
-      showScanFeedback('送信エラー', 'このQRは保持せず、もう一度読み取ってください', 'error', 1200);
+  function removeDeliveryTokens(tokens) {
+    const accepted = new Set((tokens || []).map(token => String(token || '').trim().toUpperCase()).filter(Boolean));
+    if (!accepted.size) return;
+    state.deliveryQueue = state.deliveryQueue.filter(item => !accepted.has(item.token));
+    if (state.deliveryInFlight) {
+      state.deliveryInFlight.items = state.deliveryInFlight.items.filter(item => !accepted.has(item.token));
+      if (!state.deliveryInFlight.items.length) {
+        window.clearTimeout(state.deliveryTimer);
+        state.deliveryTimer = null;
+        state.deliveryInFlight = null;
+      }
     }
-    pumpDeliveryQueue();
+  }
+
+  function deferDeliveryRetry(delay = 1000) {
+    const batch = state.deliveryInFlight;
+    window.clearTimeout(state.deliveryTimer);
+    state.deliveryTimer = window.setTimeout(() => {
+      state.deliveryTimer = null;
+      if (batch && state.deliveryInFlight === batch) sendDeliveryBatch(batch);
+      else if (!state.deliveryInFlight) pumpDeliveryQueue();
+    }, delay);
   }
 
   function cameraLabel(facingMode) {
@@ -211,6 +244,12 @@
     for (const [key, seenAt] of state.lastSeen.entries()) {
       if (now - seenAt > 15000) state.lastSeen.delete(key);
     }
+    if (state.deliveryQueue.length >= MAX_DELIVERY_QUEUE) {
+      setStatus('送信待ちが200件に達しました。保存後に再開してください', 'error');
+      showScanFeedback('送信待ち上限', 'GASへの保存が進むまで読み取りを停止します', 'error', 1600);
+      stopCamera(false);
+      return;
+    }
     state.scanCount += 1;
     state.latestToken = token;
     elements.count.textContent = '本日の読取 ' + state.scanCount;
@@ -221,24 +260,62 @@
     elements.frame.classList.add('scan-success');
     window.clearTimeout(state.successTimer);
     state.successTimer = window.setTimeout(() => elements.frame.classList.remove('scan-success'), 420);
-    state.deliveryQueue.push({ token: token, attempts: 0 });
+    state.deliveryQueue.push({ token: token });
     pumpDeliveryQueue();
     playScannerTone('detected');
     if ('vibrate' in navigator && typeof navigator.vibrate === 'function') navigator.vibrate(35);
   }
 
   function handleTokenAccepted(message) {
-    settleDelivery(message.token, true);
-    if (message.token && message.token !== state.latestToken) return;
+    removeDeliveryTokens([message.token]);
+    if (message.token && message.token !== state.latestToken) {
+      if (!state.deliveryInFlight) pumpDeliveryQueue();
+      return;
+    }
     elements.lastRead.textContent = '直近の読取：#' + state.scanCount + '　GASへ受け渡し済み';
     setStatus('読み取り済み。GASへ受け渡しました。次のノートへ', 'success');
     showScanFeedback('送信済み', 'GASへ受け渡しました', 'success', 800);
+    if (!state.deliveryInFlight) pumpDeliveryQueue();
   }
 
   function handleTokenRejected(message) {
-    settleDelivery(message.token, false);
-    if (message.token && message.token !== state.latestToken) return;
+    removeDeliveryTokens([message.token]);
+    if (message.token && message.token !== state.latestToken) {
+      if (!state.deliveryInFlight) pumpDeliveryQueue();
+      return;
+    }
     setStatus(message.message || 'このQRをGASで受け付けられませんでした', 'error');
+    if (!state.deliveryInFlight) pumpDeliveryQueue();
+  }
+
+  function handleTokensAccepted(message) {
+    const batch = state.deliveryInFlight;
+    if (!batch || (message.batchId && message.batchId !== batch.batchId)) return;
+    window.clearTimeout(state.deliveryTimer);
+    state.deliveryTimer = null;
+    const accepted = Array.isArray(message.tokens) ? message.tokens : [];
+    const rejected = Array.isArray(message.rejected) ? message.rejected : [];
+    removeDeliveryTokens(accepted);
+    removeDeliveryTokens(rejected.map(item => item && item.token));
+    rejected.forEach(item => {
+      if (item && item.token === state.latestToken) setStatus(item.message || 'このQRをGASで受け付けられませんでした', 'error');
+    });
+    const blocked = Array.isArray(message.blocked) ? message.blocked : [];
+    const remaining = state.deliveryInFlight ? state.deliveryInFlight.items.length : 0;
+    state.deliveryInFlight = null;
+    if (blocked.length || remaining) {
+      setStatus('GASの保存待ちです。読み取りは保持されています', 'warning');
+      showScanFeedback('保存待ち', '保存が進み次第、自動で再送します', 'warning', 1200);
+      deferDeliveryRetry(blocked.length ? 1000 : 250);
+    } else {
+      pumpDeliveryQueue();
+    }
+  }
+
+  function handleQueueFull(message) {
+    setStatus(message.message || 'GASの送信待ちが上限に達しています', 'warning');
+    showScanFeedback('保存待ち', 'GASへの保存が進み次第、自動で再送します', 'warning', 1200);
+    deferDeliveryRetry(1200);
   }
 
   function handleSubmissionResult(message) {
@@ -269,16 +346,17 @@
     setStatus('カメラを起動しています…');
     try {
       const reader = new window.ZXingBrowser.BrowserQRCodeReader(undefined, {
-        delayBetweenScanAttempts: 120,
-        delayBetweenScanSuccess: 90
+        delayBetweenScanAttempts: 45,
+        delayBetweenScanSuccess: 45
       });
       state.reader = reader;
       state.controls = await reader.decodeFromConstraints({
         audio: false,
         video: {
           facingMode: { ideal: state.requestedFacingMode },
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
+          width: { ideal: 960, max: 1280 },
+          height: { ideal: 540, max: 720 },
+          frameRate: { ideal: 30, max: 30 }
         }
       }, elements.video, result => {
         if (result) handleToken(result.getText());
@@ -357,6 +435,10 @@
     if (message.type === 'CONNECTED') {
       setConnected(true);
       void startCamera();
+    } else if (message.type === 'TOKENS_ACCEPTED') {
+      handleTokensAccepted(message);
+    } else if (message.type === 'QUEUE_FULL') {
+      handleQueueFull(message);
     } else if (message.type === 'TOKEN_ACCEPTED') {
       handleTokenAccepted(message);
     } else if (message.type === 'TOKEN_REJECTED') {
@@ -391,6 +473,11 @@
     } catch (_) {}
   }, { passive: true });
   window.addEventListener('beforeunload', () => stopCamera());
+
+  function createId(prefix) {
+    const uuid = window.crypto && crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '') : Math.random().toString(36).slice(2) + Date.now().toString(36);
+    return prefix + '-' + uuid.toUpperCase();
+  }
 
   setConnected(validConnection());
   if (validConnection()) {
