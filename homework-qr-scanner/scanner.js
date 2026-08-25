@@ -272,9 +272,9 @@
       if (!state.deliveryInFlight) pumpDeliveryQueue();
       return;
     }
-    elements.lastRead.textContent = '直近の読取：#' + state.scanCount + '　GASへ受け渡し済み';
-    setStatus('読み取り済み。GASへ受け渡しました。次のノートへ', 'success');
-    showScanFeedback('送信済み', 'GASへ受け渡しました', 'success', 800);
+    elements.lastRead.textContent = '直近の読取：#' + state.scanCount + '　GAS受付済み・保存待ち';
+    setStatus('読み取り済み。GAS画面で保存処理中です。次のノートへ', 'success');
+    showScanFeedback('GAS受付済み', 'スプレッドシートへ保存中', 'success', 800);
     if (!state.deliveryInFlight) pumpDeliveryQueue();
   }
 
@@ -297,6 +297,10 @@
     const rejected = Array.isArray(message.rejected) ? message.rejected : [];
     removeDeliveryTokens(accepted);
     removeDeliveryTokens(rejected.map(item => item && item.token));
+    if (accepted.includes(state.latestToken)) {
+      elements.lastRead.textContent = '直近の読取：#' + state.scanCount + '　GAS受付済み・保存待ち';
+      setStatus('読み取り済み。GAS画面で保存処理中です。次のノートへ', 'success');
+    }
     rejected.forEach(item => {
       if (item && item.token === state.latestToken) setStatus(item.message || 'このQRをGASで受け付けられませんでした', 'error');
     });
