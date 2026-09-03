@@ -42,6 +42,14 @@
         </div>
       </div>
 
+      <div id="saveFeedback" class="save-feedback" role="status" aria-live="assertive" aria-atomic="true" hidden>
+        <span class="save-feedback-icon" aria-hidden="true">✓</span>
+        <div>
+          <strong id="saveFeedbackTitle">保存完了</strong>
+          <span id="saveFeedbackDetail">今日の提出として登録しました</span>
+        </div>
+      </div>
+
       <div class="viewer-footer">
         <p id="liveStatus" class="live-status" role="status" aria-live="polite">GAS画面との接続を待っています</p>
         <p id="cameraControlsStatus" class="camera-controls-status" role="status" aria-live="polite">外カメラ・左右反転なし</p>
@@ -67,6 +75,6 @@
     <p id="lastRead" class="last-read" hidden></p>
   </main>
   <script src="./vendor/zxing-browser.min.js"></script>
-  <script src="./scanner.js?v=0.17.2" defer></script>
+  <script src="./scanner.js?v=0.17.3" defer></script>
 </body>
 </html>
