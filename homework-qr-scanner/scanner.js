@@ -20,6 +20,9 @@
     feedbackOverlay: document.getElementById('scanFeedbackOverlay'),
     feedbackTitle: document.getElementById('scanFeedbackTitle'),
     feedbackDetail: document.getElementById('scanFeedbackDetail'),
+    saveFeedback: document.getElementById('saveFeedback'),
+    saveFeedbackTitle: document.getElementById('saveFeedbackTitle'),
+    saveFeedbackDetail: document.getElementById('saveFeedbackDetail'),
     status: document.getElementById('liveStatus'),
     cameraControlsStatus: document.getElementById('cameraControlsStatus'),
     button: document.getElementById('cameraButton'),
@@ -42,6 +45,7 @@
     starting: false,
     switching: false,
     feedbackTimer: null,
+    saveFeedbackTimer: null,
     latestToken: '',
     audioContext: null,
     deliveryQueue: [],
@@ -88,6 +92,25 @@
     window.clearTimeout(state.feedbackTimer);
     elements.feedbackOverlay.hidden = true;
     elements.feedbackOverlay.className = 'scan-feedback-overlay';
+  }
+
+  function showSaveFeedback(title, detail, kind = 'success', duration = 1500) {
+    if (!elements.saveFeedback) return;
+    window.clearTimeout(state.saveFeedbackTimer);
+    elements.saveFeedbackTitle.textContent = title;
+    elements.saveFeedbackDetail.textContent = detail;
+    elements.saveFeedback.className = 'save-feedback' + (kind && kind !== 'success' ? ' ' + kind : '');
+    elements.saveFeedback.hidden = false;
+    if (duration > 0) {
+      state.saveFeedbackTimer = window.setTimeout(hideSaveFeedback, duration);
+    }
+  }
+
+  function hideSaveFeedback() {
+    window.clearTimeout(state.saveFeedbackTimer);
+    if (!elements.saveFeedback) return;
+    elements.saveFeedback.hidden = true;
+    elements.saveFeedback.className = 'save-feedback';
   }
 
   function getAudioContext() {
@@ -252,6 +275,7 @@
     }
     state.scanCount += 1;
     state.latestToken = token;
+    hideSaveFeedback();
     elements.count.textContent = '本日の読取 ' + state.scanCount;
     elements.lastRead.hidden = false;
     elements.lastRead.textContent = '直近の読取：#' + state.scanCount + '　GASへ送信中';
@@ -327,7 +351,8 @@
     if (message.status === 'RECEIVED') {
       elements.lastRead.textContent = '直近の読取：#' + state.scanCount + '　保存完了';
       setStatus('保存完了。次のノートへ', 'success');
-      showScanFeedback('保存完了', '今日の提出として登録しました', 'success', 900);
+      hideScanFeedback();
+      showSaveFeedback('保存完了', '今日の提出として登録しました', 'success', 1500);
     } else if (message.status === 'ALREADY_RECEIVED' || message.status === 'DUPLICATE_REQUEST') {
       elements.lastRead.textContent = '直近の読取：#' + state.scanCount + '　今日は確認済み';
       setStatus('今日は確認済みです。次のノートへ', 'warning');
@@ -401,6 +426,7 @@
     state.mirrorEnabled = false;
     elements.video.classList.remove('camera-preview--mirrored');
     hideScanFeedback();
+    hideSaveFeedback();
     elements.frame.classList.remove('is-active');
     elements.message.hidden = false;
     elements.button.textContent = 'カメラを開始';
